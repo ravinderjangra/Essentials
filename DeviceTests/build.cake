@@ -1,4 +1,4 @@
-#addin nuget:?package=Cake.Android.Adb&version=2.0.6
+#addin nuget:?package=Cake.Android.Adb&version=3.0.0
 #addin nuget:?package=Cake.Android.AvdManager&version=1.0.3
 #addin nuget:?package=Cake.FileHelpers
 
