@@ -1,17 +1,8 @@
-#addin nuget:?package=Cake.AppleSimulator
 #addin nuget:?package=Cake.Android.Adb&version=2.0.6
 #addin nuget:?package=Cake.Android.AvdManager&version=1.0.3
 #addin nuget:?package=Cake.FileHelpers
 
 var TARGET = Argument("target", "Default");
-
-var IOS_SIM_NAME = EnvironmentVariable("IOS_SIM_NAME") ?? "iPhone X";
-var IOS_SIM_RUNTIME = EnvironmentVariable("IOS_SIM_RUNTIME") ?? "iOS 11.4";
-var IOS_PROJ = "./DeviceTests.iOS/DeviceTests.iOS.csproj";
-var IOS_BUNDLE_ID = "com.xamarin.essentials.devicetests";
-var IOS_IPA_PATH = "./DeviceTests.iOS/bin/iPhoneSimulator/Release/XamarinEssentialsDeviceTestsiOS.app";
-var IOS_TEST_RESULTS_PATH = "./xunit-ios.xml";
-
 var ANDROID_PROJ = "./DeviceTests.Android/DeviceTests.Android.csproj";
 var ANDROID_APK_PATH = "./DeviceTests.Android/bin/Release/com.xamarin.essentials.devicetests-Signed.apk";
 var ANDROID_TEST_RESULTS_PATH = "./xunit-android.xml";
@@ -77,79 +68,6 @@ Action<FilePath, string> AddPlatformToTestResults = (FilePath testResultsFile, s
         FileWriteText(testResultsFile, txt);
     }
 };
-
-Task ("build-ios")
-    .Does (() =>
-{
-    // Setup the test listener config to be built into the app
-    FileWriteText((new FilePath(IOS_PROJ)).GetDirectory().CombineWithFilePath("tests.cfg"), $"{TCP_LISTEN_HOST}:{TCP_LISTEN_PORT}");
-
-    // Nuget restore
-    MSBuild (IOS_PROJ, c => {
-        c.Configuration = "Release";
-        c.Targets.Clear();
-        c.Targets.Add("Restore");
-    });
-
-    // Build the project (with ipa)
-    MSBuild (IOS_PROJ, c => {
-        c.Configuration = "Release";
-        c.Properties["Platform"] = new List<string> { "iPhoneSimulator" };
-        c.Properties["BuildIpa"] = new List<string> { "true" };
-        c.Targets.Clear();
-        c.Targets.Add("Rebuild");
-    });
-});
-
-Task ("test-ios-emu")
-    .IsDependentOn ("build-ios")
-    .Does (() =>
-{
-    // Look for a matching simulator on the system
-    var sim = ListAppleSimulators ()
-        .First (s => (s.Availability.Contains("available") || s.Availability.Contains("booted"))
-                && !s.Availability.Contains("unavailable")
-                && s.Name == IOS_SIM_NAME && s.Runtime == IOS_SIM_RUNTIME);
-
-    // Boot the simulator
-    Information("Booting: {0} ({1} - {2})", sim.Name, sim.Runtime, sim.UDID);
-    if (!sim.State.ToLower().Contains ("booted"))
-        BootAppleSimulator (sim.UDID);
-
-    // Wait for it to be booted
-    var booted = false;
-    for (int i = 0; i < 100; i++) {
-        if (ListAppleSimulators().Any (s => s.UDID == sim.UDID && s.State.ToLower().Contains("booted"))) {
-            booted = true;
-            break;
-        }
-        System.Threading.Thread.Sleep(1000);
-    }
-
-    // Install the IPA that was previously built
-    var ipaPath = new FilePath(IOS_IPA_PATH);
-    Information ("Installing: {0}", ipaPath);
-    InstalliOSApplication(sim.UDID, MakeAbsolute(ipaPath).FullPath);
-
-    // Start our Test Results TCP listener
-    Information("Started TCP Test Results Listener on port: {0}", TCP_LISTEN_PORT);
-    var tcpListenerTask = DownloadTcpTextAsync (TCP_LISTEN_PORT, IOS_TEST_RESULTS_PATH);
-
-    // Launch the IPA
-    Information("Launching: {0}", IOS_BUNDLE_ID);
-    LaunchiOSApplication(sim.UDID, IOS_BUNDLE_ID);
-
-    // Wait for the TCP listener to get results
-    Information("Waiting for tests...");
-    tcpListenerTask.Wait ();
-
-    AddPlatformToTestResults(IOS_TEST_RESULTS_PATH, "iOS");
-
-    // Close up simulators
-    Information("Closing Simulator");
-    ShutdownAllAppleSimulators ();
-});
-
 
 Task ("build-android")
     .Does (() =>
@@ -257,66 +175,6 @@ Task ("test-android-emu")
 
     // Close emulator
     emu.Kill();
-});
-
-
-Task ("build-uwp")
-    .Does (() =>
-{
-    // Nuget restore
-    MSBuild (UWP_PROJ, c => {
-        c.Targets.Clear();
-        c.Targets.Add("Restore");
-    });
-
-    // Build the project (with ipa)
-    MSBuild (UWP_PROJ, c => {
-        c.Configuration = "Debug";
-        c.Properties["AppxBundlePlatforms"] = new List<string> { "x86" };
-        c.Properties["AppxBundle"] = new List<string> { "Always" };
-        c.Targets.Clear();
-        c.Targets.Add("Rebuild");
-    });
-});
-
-
-Task ("test-uwp-emu")
-    .IsDependentOn ("build-uwp")
-    .WithCriteria(IsRunningOnWindows())
-    .Does (() =>
-{
-    var uninstallPS = new Action (() => {
-        try {
-            StartProcess ("powershell",
-                "$app = Get-AppxPackage -Name " + UWP_PACKAGE_ID + "; if ($app) { Remove-AppxPackage -Package $app.PackageFullName }");
-        } catch { }
-    });
-
-    // Try to uninstall the app if it exists from before
-    uninstallPS();
-    
-    // Install the appx
-    var appxBundlePath = GetFiles("./**/AppPackages/**/*.appxbundle").First ();
-    Information("Installing appx: {0}", appxBundlePath);
-    StartProcess ("powershell", "Add-AppxPackage -Path \"" + MakeAbsolute(appxBundlePath).FullPath + "\"");
-
-    // Start the TCP Test results listener
-    Information("Started TCP Test Results Listener on port: {0}:{1}", TCP_LISTEN_HOST, TCP_LISTEN_PORT);
-    var tcpListenerTask = DownloadTcpTextAsync (TCP_LISTEN_PORT, UWP_TEST_RESULTS_PATH);
-
-    // Launch the app
-    Information("Running appx: {0}", appxBundlePath);
-    var ip = TCP_LISTEN_HOST.Replace(".", "-");
-    System.Diagnostics.Process.Start($"xamarin-essentials-device-tests://{ip}_{TCP_LISTEN_PORT}");
-
-    // Wait for the test results to come back
-    Information("Waiting for tests...");
-    tcpListenerTask.Wait ();
-
-    AddPlatformToTestResults(UWP_TEST_RESULTS_PATH, "UWP");
-
-    // Uninstall the app (this will terminate it too)
-    uninstallPS();
 });
 
 RunTarget(TARGET);
